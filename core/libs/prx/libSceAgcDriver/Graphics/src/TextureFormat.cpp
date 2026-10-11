@@ -20,6 +20,7 @@ struct FormatEntry {
 
 constexpr FormatEntry kFormatLookup[] = {
     {1, VK_FORMAT_R8_UNORM, 1, false},
+    {2, VK_FORMAT_R8_SNORM, 1, false},
     {5, VK_FORMAT_R8_UINT, 1, false},
     {6, VK_FORMAT_R8_SINT, 1, false},
     {7, VK_FORMAT_R16_UNORM, 2, false},
@@ -66,7 +67,7 @@ constexpr FormatEntry kFormatLookup[] = {
     {132, VK_FORMAT_E5B9G9R9_UFLOAT_PACK32, 4, false},
     {133, VK_FORMAT_R5G6B5_UNORM_PACK16, 2, false},
     {134, VK_FORMAT_A1R5G5B5_UNORM_PACK16, 2, false},
-    {136, VK_FORMAT_R4G4B4A4_UNORM_PACK16, 2, false},
+    {136, VK_FORMAT_B4G4R4A4_UNORM_PACK16, 2, false},
     {169, VK_FORMAT_BC1_RGBA_UNORM_BLOCK, 8, true},
     {170, VK_FORMAT_BC1_RGBA_SRGB_BLOCK, 8, true},
     {171, VK_FORMAT_BC2_UNORM_BLOCK, 16, true},
@@ -133,11 +134,38 @@ VkFormat SampledTextureFormat(const Context& context, std::uint32_t guestFormat)
     return ResolveTextureFormat(static_cast<std::uint32_t>(ShaderRecompiler::SrgbUnormFormat(format)));
 }
 
+bool IsSrgbTextureFormat(std::uint32_t guestFormat) {
+    switch (findFormatEntry(guestFormat).vkFormat) {
+        case VK_FORMAT_R8_SRGB:
+        case VK_FORMAT_R8G8_SRGB:
+        case VK_FORMAT_R8G8B8A8_SRGB:
+        case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+        case VK_FORMAT_BC2_SRGB_BLOCK:
+        case VK_FORMAT_BC3_SRGB_BLOCK:
+        case VK_FORMAT_BC7_SRGB_BLOCK: return true;
+        default: return false;
+    }
+}
+
 std::optional<std::uint32_t> FindGuestTextureFormat(VkFormat format, std::uint32_t elementBytes) {
     for (const auto& entry : kFormatLookup) {
         if (!entry.blockCompressed && entry.vkFormat == format && entry.bytesPerElement == elementBytes) return entry.guestFormat;
     }
     return std::nullopt;
+}
+
+VkComponentSwizzle TextureComponentChannel(std::uint32_t guestFormat, VkComponentSwizzle component) {
+    if (component < VK_COMPONENT_SWIZZLE_R || component > VK_COMPONENT_SWIZZLE_A) return component;
+    const auto index = static_cast<std::size_t>(component - VK_COMPONENT_SWIZZLE_R);
+    constexpr std::array<VkComponentSwizzle, 4> bgrb{VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_B};
+    constexpr std::array<VkComponentSwizzle, 4> bgra{VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_A};
+    constexpr std::array<VkComponentSwizzle, 4> argb{VK_COMPONENT_SWIZZLE_A, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B};
+    switch (guestFormat) {
+        case 133: return bgrb[index];
+        case 134: return bgra[index];
+        case 136: return argb[index];
+        default: return component;
+    }
 }
 
 std::uint32_t BytesPerElement(std::uint32_t guestFormat) {

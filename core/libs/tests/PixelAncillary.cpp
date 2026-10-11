@@ -59,6 +59,59 @@ static void Lower(IrProgram& program) {
     const ShaderPixelInputInfo pixel {};
     ShaderInfoCollector().Collect(program, ShaderStageInputInfo {nullptr, &pixel, nullptr});
 }
+static void ExtractVector(std::uint32_t offset, std::uint32_t count, StageInputKind kind, std::uint32_t fieldOffset) {
+    IrProgram program;
+    program.Resources().stage = IrShaderStage::Pixel;
+    program.Resources().resourceTrackingComplete = true;
+    auto& block = program.CreateBlock();
+    program.SetEntryBlock(block);
+    program.BlockOrder().push_back(&block);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(block);
+    auto& ancillary = builder.Emit(IrOpcode::GetBuiltin, IrType::U32, {&builder.Constant(static_cast<std::uint32_t>(StageInputKind::PackedAncillary)), &builder.Constant(0u)});
+    auto& maskedOffset = builder.BitwiseAnd(builder.Constant(offset), builder.Constant(31u));
+    auto& maskedCount = builder.BitwiseAnd(builder.Constant(count), builder.Constant(31u));
+    auto& available = builder.ISub(builder.Constant(32u), maskedOffset);
+    auto& clampedCount = builder.Emit(IrOpcode::UMin32, IrType::U32, {&maskedCount, &available});
+    auto& user = builder.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&ancillary, &maskedOffset, &clampedCount});
+    static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&user}));
+    static_cast<void>(builder.Emit(IrOpcode::Return, IrType::Void, {}));
+    Lower(program);
+    const IrValue* field = user.Argument(0)->Resolve();
+    Require(field->Opcode() == IrOpcode::GetBuiltin);
+    Require(static_cast<StageInputKind>(field->Argument(0)->Resolve()->ImmediateU32()) == kind);
+    Require(user.Argument(1)->Resolve()->ImmediateU32() == fieldOffset);
+    Require(user.Argument(2)->Resolve()->ImmediateU32() == count);
+}
+
+static void ExtractVectorMaskedCopy(std::uint32_t offset, std::uint32_t count, StageInputKind kind, std::uint32_t fieldOffset) {
+    IrProgram program;
+    program.Resources().stage = IrShaderStage::Pixel;
+    program.Resources().resourceTrackingComplete = true;
+    auto& block = program.CreateBlock();
+    program.SetEntryBlock(block);
+    program.BlockOrder().push_back(&block);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(block);
+    auto& ancillary = builder.Emit(IrOpcode::GetBuiltin, IrType::U32, {&builder.Constant(static_cast<std::uint32_t>(StageInputKind::PackedAncillary)), &builder.Constant(0u)});
+    auto& maskedOffset = builder.BitwiseAnd(builder.Constant(offset), builder.Constant(31u));
+    auto& maskedCount = builder.BitwiseAnd(builder.Constant(count), builder.Constant(31u));
+    auto& available = builder.ISub(builder.Constant(32u), maskedOffset);
+    auto& clampedCount = builder.Emit(IrOpcode::UMin32, IrType::U32, {&maskedCount, &available});
+    auto& user = builder.Emit(IrOpcode::BitFieldUExtract, IrType::U32, {&ancillary, &maskedOffset, &clampedCount});
+    static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&user}));
+    auto& lane = builder.Emit(IrOpcode::LaneId, IrType::U32, {});
+    auto& active = builder.Emit(IrOpcode::ULessThan32, IrType::Bool, {&lane, &builder.Constant(16u)});
+    auto& copy = builder.Emit(IrOpcode::SelectU32, IrType::U32, {&active, &ancillary, &builder.Constant(0u)});
+    static_cast<void>(builder.Emit(IrOpcode::ReferenceU32, IrType::Void, {&copy}));
+    static_cast<void>(builder.Emit(IrOpcode::Return, IrType::Void, {}));
+    ConstantFolder().Fold(program);
+    const IrValue* field = user.Argument(0)->Resolve();
+    Require(field->Opcode() == IrOpcode::GetBuiltin);
+    Require(static_cast<StageInputKind>(field->Argument(0)->Resolve()->ImmediateU32()) == kind);
+    Require(user.Argument(1)->Resolve()->ImmediateU32() == fieldOffset);
+    Require(user.Argument(2)->Resolve()->ImmediateU32() == count);
+}
 static void Extract(IrOpcode opcode, std::uint32_t offset, std::uint32_t count, StageInputKind kind, std::uint32_t fieldOffset) {
     IrProgram program;
     auto& user = Build(program, opcode, offset, count);
@@ -108,6 +161,7 @@ static std::uint32_t Evaluate(const IrValue* value, const Row& row) {
         case IrOpcode::BitFieldSExtract:
             return BitField(Evaluate(value->Argument(0), row), Evaluate(value->Argument(1), row), Evaluate(value->Argument(2), row), value->Opcode() == IrOpcode::BitFieldSExtract);
         case IrOpcode::SelectU32: return Evaluate(value->Argument(0), row) != 0u ? Evaluate(value->Argument(1), row) : Evaluate(value->Argument(2), row);
+        case IrOpcode::Phi: return Evaluate(value->Argument(row.frontFacing ? 0u : 1u), row);
         default: break;
     }
     throw std::runtime_error("packed pixel ancillary evaluation reached an unsupported value");
@@ -144,6 +198,61 @@ static void LateFold() {
         Require(Evaluate(&user, row) == BitField(PackedWord(row), 16u, 11u, false));
     }
 }
+static IrValue& Merged(IrProgram& program, IrOpcode opcode, std::uint32_t offset, std::uint32_t count, bool loop) {
+    auto& entry = Begin(program);
+    auto& carry = program.CreateBlock();
+    auto& merge = program.CreateBlock();
+    program.BlockOrder().push_back(&carry);
+    program.BlockOrder().push_back(&merge);
+    IrBuilder builder(program);
+    builder.SetInsertionPoint(entry);
+    IrValue& ancillary = AncillaryBuiltin(builder);
+    IrValue& frontFacing = FrontFacingBuiltin(builder);
+    IrValue& phi = program.CreateValue(IrOpcode::Phi, IrType::U32);
+    IrValue* other = &builder.Constant(SelectOther);
+    if (loop) {
+        entry.AddBranch(&carry);
+        carry.AddBranch(&carry);
+        carry.AddBranch(&merge);
+        carry.AppendInstruction(&phi);
+        builder.SetInsertionPoint(carry);
+        other = &builder.Emit(IrOpcode::SelectU32, IrType::U32, {&frontFacing, &phi, &builder.Constant(SelectOther)});
+        phi.AddPhiOperand(&entry, &ancillary);
+        phi.AddPhiOperand(&carry, other);
+    } else {
+        entry.AddBranch(&carry);
+        entry.AddBranch(&merge);
+        carry.AddBranch(&merge);
+        merge.AppendInstruction(&phi);
+        phi.AddPhiOperand(&entry, &ancillary);
+        phi.AddPhiOperand(&carry, other);
+    }
+    builder.SetInsertionPoint(merge);
+    IrValue& user = opcode == IrOpcode::BitwiseOr32 ? builder.Emit(opcode, IrType::U32, {&phi, &builder.Constant(offset)})
+                                                    : builder.Emit(opcode, IrType::U32, {&phi, &builder.Constant(offset), &builder.Constant(count)});
+    End(builder, user);
+    return user;
+}
+static void MergedValues(IrOpcode opcode, std::uint32_t offset, std::uint32_t count, bool loop) {
+    IrProgram program;
+    auto& user = Merged(program, opcode, offset, count, loop);
+    Lower(program);
+    for (const Row& row : Rows) {
+        const std::uint32_t word = row.frontFacing ? PackedWord(row) : SelectOther;
+        Require(Evaluate(&user, row) == BitField(word, offset, count, opcode == IrOpcode::BitFieldSExtract));
+    }
+}
+static void MergedRefused(IrOpcode opcode, std::uint32_t offset, std::uint32_t count, bool loop) {
+    IrProgram program;
+    static_cast<void>(Merged(program, opcode, offset, count, loop));
+    try {
+        Lower(program);
+    } catch (const std::runtime_error& error) {
+        Require(std::string(error.what()).find("unsupported live use") != std::string::npos);
+        return;
+    }
+    Require(false);
+}
 int main() {
     Extract(IrOpcode::BitFieldUExtract, 8u, 4u, StageInputKind::SampleId, 0u);
     Extract(IrOpcode::BitFieldUExtract, 9u, 2u, StageInputKind::SampleId, 1u);
@@ -159,6 +268,10 @@ int main() {
     Values(IrOpcode::BitFieldUExtract, 8u, 4u, true);
     Values(IrOpcode::BitFieldUExtract, 16u, 13u, true);
     Values(IrOpcode::BitFieldSExtract, 20u, 9u, true);
+    ExtractVector(16u, 11u, StageInputKind::Layer, 0u);
+    ExtractVectorMaskedCopy(16u, 11u, StageInputKind::Layer, 0u);
+    ExtractVectorMaskedCopy(8u, 4u, StageInputKind::SampleId, 0u);
+    ExtractVector(8u, 4u, StageInputKind::SampleId, 0u);
     Refused(IrOpcode::BitwiseOr32, 1u, 0u);
     Refused(IrOpcode::BitwiseOr32, 1u, 0u, true);
     Refused(IrOpcode::BitFieldUExtract, 2u, 4u);
@@ -172,4 +285,11 @@ int main() {
     Refused(IrOpcode::BitFieldUExtract, 8u, 0u);
     Refused(IrOpcode::BitFieldUExtract, 0u, 2u, true);
     Refused(IrOpcode::BitFieldSExtract, 12u, 4u, true);
+    MergedValues(IrOpcode::BitFieldUExtract, 8u, 4u, false);
+    MergedValues(IrOpcode::BitFieldUExtract, 16u, 13u, false);
+    MergedValues(IrOpcode::BitFieldSExtract, 20u, 9u, false);
+    MergedValues(IrOpcode::BitFieldUExtract, 16u, 11u, true);
+    MergedRefused(IrOpcode::BitwiseOr32, 1u, 0u, false);
+    MergedRefused(IrOpcode::BitFieldUExtract, 12u, 4u, false);
+    MergedRefused(IrOpcode::BitFieldUExtract, 0u, 2u, true);
 }

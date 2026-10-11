@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 PARENT = 'if .parent then "\\(.parent.owner.login)/\\(.parent.name)" else .nameWithOwner end'
 EXPORT = re.compile(r"^\+.*\bAPS5_VABI\s+(\w+)\s*\(")
 DEPENDS = re.compile(r'Depends on:([^\r\n]*(?:\r?\n[ \t]*[-*][ \t]*#\d+[^\r\n]*)*)')
+PLAIN_DEPENDS = re.compile(r'Depends on[ \t]+(#\d+\b(?:(?:[ \t]*,[ \t]*(?:and[ \t]+)?|[ \t]+and[ \t]+)#\d+\b)*)')
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))?", re.M)
 MARKER = "<!-- pr-overlap -->"
 
@@ -31,7 +32,7 @@ def open_prs(base):
     out = gh("api", "--paginate", "--slurp", f"repos/{REPO}/pulls?{query}")
     prs = {}
     for pr in chain.from_iterable(json.loads(out)):
-        depends = DEPENDS.search(pr["body"] or "")
+        depends = DEPENDS.search(pr["body"] or "") or PLAIN_DEPENDS.search(pr["body"] or "")
         prs[pr["number"]] = {
             "ref": f"refs/pr/{pr['number']}",
             "sha": pr["head"]["sha"],
@@ -141,6 +142,12 @@ def report(rows, blob):
     return "\n".join(lines) + "\n"
 
 
+def write_reports(out, rows, blob):
+    out.mkdir(parents=True, exist_ok=True)
+    for number, found in rows.items():
+        (out / f"{number}.md").write_text(report(found, blob), encoding="utf-8")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="report open pull requests that overlap each other")
     parser.add_argument("--base", default="main")
@@ -168,6 +175,4 @@ if __name__ == "__main__":
     if args.branch:
         print(report(rows[0], blob) or "No overlap with open pull requests.", end="")
         raise SystemExit
-    args.out.mkdir(parents=True, exist_ok=True)
-    for number, found in rows.items():
-        (args.out / f"{number}.md").write_text(report(found, blob))
+    write_reports(args.out, rows, blob)

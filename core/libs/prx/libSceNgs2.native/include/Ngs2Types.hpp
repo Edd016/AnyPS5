@@ -66,6 +66,7 @@ static constexpr std::uint32_t SCE_NGS2_CUSTOM_MODULE_ID_USER_FX2 = 0x1f;
 static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_CONTINUE = 1;
 static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_APPEND = 2;
 static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_RESET = 4;
+static constexpr std::uint32_t SCE_NGS2_WAVEFORM_BLOCKS_FLAG_SILENCE = 0x10;
 
 static constexpr std::uint32_t SCE_NGS2_VOICE_CALLBACK_FLAG_BLOCK_END = 1;
 static constexpr std::uint32_t SCE_NGS2_VOICE_CALLBACK_FLAG_BLOCK_REPEAT = 2;
@@ -591,12 +592,19 @@ struct Ngs2WaveformInfo {
 static_assert(sizeof(Ngs2WaveformInfo) == 232);
 
 struct Ngs2PanParam {
-    std::uint32_t reserved[16];
+    float angle;
+    float distance;
+    float fbw_level;
+    float lfe_level;
 };
+static_assert(sizeof(Ngs2PanParam) == 16);
 
 struct Ngs2PanWork {
-    std::uint32_t reserved[64];
+    float speaker_angles[8];
+    float unit_angle;
+    std::uint32_t num_speakers;
 };
+static_assert(sizeof(Ngs2PanWork) == 40);
 
 struct Ngs2GeomListenerParam {
     std::uint32_t reserved[32];

@@ -13,6 +13,7 @@
 
 #include "SDL.h"
 #include "SceTypes.hpp"
+#include "prx/libc/include/PreciseWait.hpp"
 #include "prx/libkernel/Time/include/Time.hpp"
 
 static constexpr int PORT_TYPE_MAIN = 0;
@@ -192,11 +193,8 @@ static const void* prepareBuffer(const Port& port, const void* data, std::vector
 }
 
 static void sleepUs(std::unique_lock<std::mutex>& lock, std::uint64_t us) {
-    struct timespec req{};
-    req.tv_sec = static_cast<time_t>(us / 1000000ULL);
-    req.tv_nsec = static_cast<long>((us % 1000000ULL) * 1000ULL);
     lock.unlock();
-    nanosleep(&req, nullptr);
+    PreciseSleepUs(us);
     lock.lock();
 }
 
@@ -514,6 +512,26 @@ int APS5_VABI sceAudioOutSetMixLevelPadSpk(int handle, int mixLevel) {
         throw std::runtime_error("sceAudioOutSetMixLevelPadSpk: negative mix level not supported");
     }
     port->mixLevel = mixLevel;
+    return 0;
+}
+
+int APS5_VABI sceAudioOutExClose() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceAudioOutExConfigureOutput() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceAudioOutExGetMonitorInfo() {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
+
+int APS5_VABI sceAudioOutExOpen() {
+    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 

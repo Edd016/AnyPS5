@@ -1,5 +1,6 @@
 #include "prx/libkernel/Time/include/Time.hpp"
 #include "prx/libkernel/Time/include/TimedWait.hpp"
+#include "prx/libkernel/Pthread/include/Cancel.hpp"
 
 #include "prx/libc/include/General.hpp"
 #include "prx/libkernel/KernelErrors.hpp"
@@ -160,11 +161,13 @@ static const bool g_timerSelfTest = [] {
 extern "C" {
 
 std::uint64_t APS5_VABI sceKernelGetProcessTime() {
-    return (GetMonotonicNanos() - GetStartNanos()) / 1000ULL;
+    const std::uint64_t start = GetStartNanos();
+    return (GetMonotonicNanos() - start) / 1000ULL;
 }
 
 std::uint64_t APS5_VABI sceKernelGetProcessTimeCounter() {
-    return GetMonotonicNanos() - GetStartNanos();
+    const std::uint64_t start = GetStartNanos();
+    return GetMonotonicNanos() - start;
 }
 
 std::uint64_t APS5_VABI sceKernelGetProcessTimeCounterFrequency() {
@@ -234,9 +237,15 @@ void KernelTraceWait_nid_postfix(const char* kind, const void* caller, std::uint
     for (auto& [name, s] : sites) s = Site{};
 }
 
+static void CancellableSleep(std::uint64_t nanos) {
+    ThreadCancel::Check();
+    TimedWait::SleepNanos(nanos);
+    ThreadCancel::Check();
+}
+
 int APS5_VABI sceKernelUsleep_nid_postfix(KernelUseconds microseconds) {
     TraceSleep(__builtin_return_address(0), microseconds);
-    TimedWait::SleepNanos(static_cast<std::uint64_t>(microseconds) * 1000ULL);
+    CancellableSleep(static_cast<std::uint64_t>(microseconds) * 1000ULL);
     return 0;
 }
 
@@ -246,8 +255,8 @@ static int SleepForRequest(const KernelTimespec* rqtp, KernelTimespec* rmtp) {
     if (rqtp == nullptr) return guestFault;
     if (rqtp->tv_nsec < 0 || rqtp->tv_nsec >= 1000000000LL) return guestInvalid;
     if (rqtp->tv_sec >= 0) {
-        TimedWait::SleepNanos(static_cast<std::uint64_t>(rqtp->tv_sec) * 1000000000ULL +
-                              static_cast<std::uint64_t>(rqtp->tv_nsec));
+        CancellableSleep(static_cast<std::uint64_t>(rqtp->tv_sec) * 1000000000ULL +
+                         static_cast<std::uint64_t>(rqtp->tv_nsec));
     }
     if (rmtp != nullptr) {
         rmtp->tv_sec = 0;
@@ -273,7 +282,7 @@ int APS5_VABI _nanosleep_nid_postfix(const KernelTimespec* rqtp, KernelTimespec*
 }
 
 int APS5_VABI usleep_nid_postfix(KernelUseconds microseconds) {
-    TimedWait::SleepNanos(static_cast<std::uint64_t>(microseconds) * 1000ULL);
+    CancellableSleep(static_cast<std::uint64_t>(microseconds) * 1000ULL);
     return 0;
 }
 
@@ -437,9 +446,8 @@ int APS5_VABI clock_gettime_nid_postfix(int clockId, KernelTimespec* tp) {
 }
 
 int APS5_VABI gettimeofday_nid_postfix(KernelTimeval* tv, KernelTimezone* tz) {
-    if (tv == nullptr) {
-        APS5_INVALID_ARG_EX;
-    }
+    KernelTimeval ignoredTime{};
+    if (tv == nullptr) tv = &ignoredTime;
 #ifdef _WIN32
     FILETIME ft{};
     GetSystemTimePreciseAsFileTime(&ft);
@@ -463,9 +471,8 @@ int APS5_VABI gettimeofday_nid_postfix(KernelTimeval* tv, KernelTimezone* tz) {
 }
 
 int APS5_VABI clock_getres_nid_postfix(int clockId, KernelTimespec* res) {
-    if (res == nullptr) {
-        APS5_INVALID_ARG_EX;
-    }
+    KernelTimespec ignoredResolution{};
+    if (res == nullptr) res = &ignoredResolution;
     if (IsCpuClock(clockId))
         return clock_getres_nid_postfix(GUEST_CLOCK_THREAD_CPUTIME_ID, res);
     if (clockId == 1 || clockId == 2) {
@@ -564,10 +571,10 @@ int APS5_VABI sceKernelClockGettime(KernelClockid clock_id, KernelTimespec* tp) 
     return clock_gettime_nid_postfix(static_cast<int>(clock_id), tp);
 }
 
-int APS5_VABI sceKernelConvertLocaltimeToUtc(int64_t local_time, int64_t reserved, int64_t* utc_time, KernelTimezone* timezone, int32_t* dst_seconds) {
+int APS5_VABI sceKernelConvertLocaltimeToUtc(int64_t local_time, int64_t reserved, int64_t* utc_time, KernelTimesec* timezone, int32_t* dst_seconds) {
     (void)reserved;
     if (utc_time != nullptr) *utc_time = local_time;
-    if (timezone != nullptr) *timezone = {0, 0};
+    if (timezone != nullptr) *timezone = {local_time, 0u, 0u};
     if (dst_seconds != nullptr) *dst_seconds = 0;
     return 0;
 }
@@ -609,7 +616,7 @@ uint64_t APS5_VABI sceKernelGetTscFrequency(void) {
 }
 
 unsigned int APS5_VABI sceKernelSleep(unsigned int seconds) {
-    TimedWait::SleepNanos(static_cast<std::uint64_t>(seconds) * 1000000000ULL);
+    CancellableSleep(static_cast<std::uint64_t>(seconds) * 1000000000ULL);
     return 0;
 }
 

@@ -15,6 +15,10 @@
 #include <string>
 #include <thread>
 
+#ifndef _WIN32
+#include <pthread.h>
+#endif
+
 enum class MutexType : std::uint32_t {
     ErrorCheck = 1,
     Recursive = 2,
@@ -24,6 +28,8 @@ enum class MutexType : std::uint32_t {
 
 struct PthreadMutexattrPrivate {
     MutexType type;
+    int protocol = 0;
+    int ceiling = 0;
 };
 
 struct PthreadMutexPrivate {
@@ -41,8 +47,15 @@ struct PthreadRwlockattrPrivate {
 };
 
 struct PthreadRwlockPrivate {
+    // TODO(technical debt): winpthreads initializes a static rwlock on first use and fails a
+    // concurrent first lock with EINVAL, which shared_timed_mutex ignores. Initialize it here.
+    PthreadRwlockPrivate() {
+        _lock.lock();
+        _lock.unlock();
+    }
     std::shared_timed_mutex _lock;
     std::atomic<std::thread::id> _writer;
+    std::atomic<int> _readers{0};
 };
 
 struct PthreadCondattrPrivate {
@@ -87,14 +100,20 @@ struct PthreadAttrPrivate {
     int _solosched = 0;
 };
 
+inline std::atomic<std::int64_t> nextThreadId{100000};
+
 struct PthreadPrivate {
+    std::int64_t tid = nextThreadId.fetch_add(1, std::memory_order_relaxed);
 #ifdef _WIN32
     void* nativeHandle = nullptr;
 #else
-    std::thread _thr;
+    pthread_t hostThread{};
 #endif
     std::thread::id threadId;
     std::atomic<unsigned> references{2};
+    std::atomic<bool> inWait{false};
+    std::atomic<int> pendingException{0};
+    void* wakeEvent = nullptr;
     void* stackAddress = nullptr;
     std::size_t stackSize = 0;
     std::atomic<int> waitCount{0};
@@ -112,7 +131,10 @@ struct PthreadPrivate {
     bool _detached;
     bool _adopted;
     std::mutex _join_mtx;
-    std::condition_variable _join_cv;
+    TimedWait::Condition _join_cv;
+    std::atomic<bool> cancelPending{false};
+    std::mutex cancelLock;
+    TimedWait::Condition* cancelWait = nullptr;
 
     PthreadPrivate();
     ~PthreadPrivate();

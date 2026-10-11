@@ -135,7 +135,10 @@ void decoderLengths() {
         {0x66, 0x48, 0x69, 0xC0, 1, 2, 3, 4}, {0x66, 0x48, 0x68, 1, 2, 3, 4}, {0x66, 0x48, 0xA9, 1, 2, 3, 4},
         {0x66, 0x48, 0xF7, 0xC0, 1, 2, 3, 4}, {0x66, 0x81, 0xC0, 0x34, 0x12}, {0x48, 0x66, 0x81, 0xC0, 0x34, 0x12},
         {0x66, 0x41, 0x81, 0xC0, 0x34, 0x12}, {0x66, 0xF7, 0xC0, 0x34, 0x12},
-        {0x48, 0x64, 0x8B, 0x00}, {0x48, 0xF3, 0x0F, 0x2B, 0x00}, {0x48, 0x67, 0x0F, 0x01, 0xFC}, {0x48, 0x48, 0x0F, 0x01, 0xFC}};
+        {0x48, 0x64, 0x8B, 0x00}, {0x48, 0xF3, 0x0F, 0x2B, 0x00}, {0x48, 0x67, 0x0F, 0x01, 0xFC}, {0x48, 0x48, 0x0F, 0x01, 0xFC},
+        {0x8F, 0xE8, 0x40, 0xA3, 0xC1, 0x70}, {0x8F, 0xE8, 0xF8, 0xA3, 0x4A, 0x10, 0x60}, {0x8F, 0xE8, 0xC0, 0xA3, 0xBA, 0x70, 0xFF, 0xFF, 0xFF, 0x30},
+        {0x8F, 0xE9, 0x78, 0x90, 0xC1}, {0x8F, 0xEA, 0x78, 0x10, 0xC0, 1, 2, 3, 4},
+        {0x8F, 0xC0}, {0x41, 0x8F, 0x07}, {0x8F, 0x05, 1, 2, 3, 4}};
     Bytes padded;
     for (const auto& instruction : instructions) {
         padded = instruction;
@@ -156,7 +159,8 @@ const std::vector<Bytes> kRipRelativeVectorLoads = {
     {0xC4, 0xE2, 0x79, 0x00, 0x05, 0x10, 0x00, 0x00, 0x00},
     {0x62, 0xF1, 0xFD, 0x08, 0x6F, 0x05, 0x10, 0x00, 0x00, 0x00},
     {0x66, 0x0F, 0x38, 0x00, 0x05, 0x10, 0x00, 0x00, 0x00},
-    {0x66, 0x0F, 0x3A, 0x0F, 0x05, 0x10, 0x00, 0x00, 0x00, 0x08}};
+    {0x66, 0x0F, 0x3A, 0x0F, 0x05, 0x10, 0x00, 0x00, 0x00, 0x08},
+    {0x8F, 0xE8, 0x78, 0xA3, 0x05, 0x10, 0x00, 0x00, 0x00, 0x30}};
 const std::vector<Bytes> kRegisterVectorOperations = {
     {0xC5, 0xF9, 0x6F, 0xC1}, {0x66, 0x0F, 0x38, 0x00, 0xC1}, {0xC5, 0xF8, 0x77}, {0xC4, 0xE2, 0x79, 0x00, 0x00}};
 
@@ -164,7 +168,7 @@ void decoderRipRelative() {
     const Codegen::X64InstructionDecoder decoder;
     for (const auto& instruction : kRipRelativeVectorLoads) {
         const auto info = decoder.DecodeInstruction(instruction.data(), instruction.size());
-        require(info.Length == instruction.size() && info.HasRipRelativeDisp && read<std::int32_t>(instruction, info.RipRelativeDispOffset) == 0x10, "VEX, EVEX or three-byte RIP-relative operand was not reported");
+        require(info.Length == instruction.size() && info.HasRipRelativeDisp && read<std::int32_t>(instruction, info.RipRelativeDispOffset) == 0x10, "VEX, EVEX, XOP or three-byte RIP-relative operand was not reported");
     }
     for (const auto& instruction : kRegisterVectorOperations)
         require(!decoder.DecodeInstruction(instruction.data(), instruction.size()).HasRipRelativeDisp, "Vector instruction without a RIP-relative operand was reported as RIP-relative");
@@ -645,6 +649,56 @@ void converterClzero() {
     require(failureOffset([&] { (void)converter->Convert(segmentRelative, {segmentHeader(text.size())}); }, "FS-relative CLZERO was accepted") == 0x20A, "CLZERO operand failure does not carry the file offset");
 }
 
+void rosettaSubstitutions() {
+    using Codegen::Amd64OnlyLowering;
+    const auto intel = Codegen::MakeAmd64OnlyInstructionMatcher();
+    const auto rosetta = Codegen::MakeAmd64OnlyInstructionMatcher(Codegen::Amd64OnlyTarget::Rosetta);
+    const auto match = [](const auto& matcher, const Bytes& bytes) { return matcher->Match(bytes.data(), bytes.size()); };
+    for (const auto& bytes : {Bytes{0x0F, 0xC7, 0xF8}, Bytes{0xF3, 0x0F, 0xC7, 0xF8}, Bytes{0x66, 0x0F, 0xAE, 0x30}})
+        require(!match(intel, bytes).has_value(), "RDSEED, RDPID or CLWB was converted for an Intel host");
+    const auto rdseed = match(rosetta, {0x48, 0x0F, 0xC7, 0xF9});
+    require(rdseed && rdseed->Lowering == Amd64OnlyLowering::InPlace && rdseed->ReplacementBytes == Bytes{0x48, 0x0F, 0xC7, 0xF1} && rdseed->InstructionName == "RDSEED", "RDSEED was not rewritten to RDRAND");
+    const auto rdseed16 = match(rosetta, {0x66, 0x41, 0x0F, 0xC7, 0xFA});
+    require(rdseed16 && rdseed16->ReplacementBytes == Bytes{0x66, 0x41, 0x0F, 0xC7, 0xF2}, "16-bit RDSEED was not rewritten to RDRAND");
+    require(!match(rosetta, {0x0F, 0xC7, 0x38}).has_value(), "VMPTRST (the memory form of 0F C7 /7) was taken for RDSEED");
+    const auto clwb = match(rosetta, {0x66, 0x0F, 0xAE, 0x74, 0x24, 0x08});
+    require(clwb && clwb->Lowering == Amd64OnlyLowering::InPlace && clwb->ReplacementBytes == Bytes{0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00} && clwb->InstructionName == "CLWB", "CLWB was not replaced by a NOP");
+    require(!match(rosetta, {0x66, 0x0F, 0xAE, 0xF1}).has_value(), "TPAUSE (the register form of 66 0F AE /6) was taken for CLWB");
+    require(!match(rosetta, {0x66, 0x0F, 0xAE, 0x38}).has_value(), "CLFLUSHOPT was taken for CLWB");
+    const auto rdpid = match(rosetta, {0xF3, 0x41, 0x0F, 0xC7, 0xFB});
+    require(rdpid && rdpid->Lowering == Amd64OnlyLowering::Trampoline && rdpid->Optional && rdpid->InstructionName == "RDPID", "RDPID was not lowered through an optional stub");
+    require(rdpid->ReturnBranchOffset == 6 && Bytes(rdpid->StubBody.begin(), rdpid->StubBody.begin() + 7) == Bytes{0x41, 0xBB, 0, 0, 0, 0, 0xE9}, "RDPID r11 stub does not load 0 before returning");
+}
+
+void converterRosetta() {
+    const auto converter = Codegen::MakeAmd64OnlyConverter(Codegen::Amd64OnlyTarget::Rosetta);
+    Bytes file(0x300, 0xCC);
+    const Bytes text = {
+        0x0F, 0xC7, 0xF8,
+        0xF3, 0x0F, 0xC7, 0xF9,
+        0x48, 0x83, 0xC1, 0x01,
+        0x66, 0x0F, 0xAE, 0x37,
+        0xC3};
+    std::copy(text.begin(), text.end(), file.begin() + 0x200);
+    const auto result = converter->Convert(file, {segmentHeader(text.size())});
+    require(result.ReplacedCount == 2 && result.Trampolines.size() == 1 && result.KeptCount == 0 && result.Reports.size() == 3, "RDSEED, RDPID and CLWB were not converted for Rosetta");
+    const auto& site = result.Trampolines[0];
+    require(site.Offset == 0x203 && site.Length == 8 && result.Reports[1].InstructionName == "RDPID", "RDPID did not absorb the following instruction");
+    const Bytes add = {0x48, 0x83, 0xC1, 0x01};
+    require(Bytes(site.Body.begin(), site.Body.begin() + 5) == Bytes{0xB9, 0, 0, 0, 0} && Bytes(site.Body.begin() + static_cast<std::ptrdiff_t>(site.ReturnBranchOffset - add.size()), site.Body.begin() + static_cast<std::ptrdiff_t>(site.ReturnBranchOffset)) == add, "RDPID stub does not load 0 and then run the absorbed instruction");
+    auto expected = file;
+    expected[0x202] = 0xF0;
+    const Bytes nop = {0x0F, 0x1F, 0x40, 0x00};
+    std::copy(nop.begin(), nop.end(), expected.begin() + 0x20B);
+    require(result.Bytes == expected, "RDSEED or CLWB was replaced with the wrong bytes");
+    auto beforeReturn = file;
+    beforeReturn[0x207] = 0xC3;
+    const auto kept = converter->Convert(beforeReturn, {segmentHeader(text.size())});
+    require(kept.KeptCount == 1 && kept.Trampolines.empty() && kept.ReplacedCount == 2, "RDPID without room for a jump was not kept");
+    const auto intel = Codegen::MakeAmd64OnlyConverter()->Convert(file, {segmentHeader(text.size())});
+    require(intel.Reports.empty() && intel.Bytes == file, "The Intel target converted RDSEED, RDPID or CLWB");
+}
+
 void reciprocalOperands() {
     const auto vex2 = Codegen::DecodeVexReciprocal(Bytes{0xC5, 0xF8, 0x52, 0xD5}.data(), 4);
     require(vex2 && vex2->Operation == Codegen::ReciprocalOperation::ReciprocalSquareRoot && vex2->Destination == 2 && vex2->Source == 5, "VEX2 VRSQRTPS was not decoded");
@@ -772,7 +826,7 @@ Bytes elfFixture(const Bytes& text) {
     write<std::uint64_t>(bytes, 24, 0x1000);
     write<std::uint64_t>(bytes, 32, 64);
     write<std::uint16_t>(bytes, 54, 56);
-    write<std::uint16_t>(bytes, 56, 6);
+    write<std::uint16_t>(bytes, 56, 7);
     write<std::uint32_t>(bytes, 64, 1);
     write<std::uint32_t>(bytes, 68, 5);
     write<std::uint64_t>(bytes, 72, 0x200);
@@ -1336,6 +1390,8 @@ int main() {
         converterSha1();
         converterMonitorWait();
         converterClzero();
+        rosettaSubstitutions();
+        converterRosetta();
         converterReciprocal();
         converterStrayRex();
         rewriterStrayRex();

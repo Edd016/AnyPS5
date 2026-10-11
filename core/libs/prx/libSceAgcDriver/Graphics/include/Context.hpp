@@ -52,10 +52,23 @@ struct DeviceFunctions {
     PFN_vkCmdDispatchIndirect cmdDispatchIndirect = nullptr;
     PFN_vkCmdBeginRenderPass cmdBeginRenderPass = nullptr;
     PFN_vkCmdEndRenderPass cmdEndRenderPass = nullptr;
+    PFN_vkCmdBeginRenderingKHR cmdBeginRendering = nullptr;
+    PFN_vkCmdEndRenderingKHR cmdEndRendering = nullptr;
     PFN_vkCmdSetViewport cmdSetViewport = nullptr;
     PFN_vkCmdSetScissor cmdSetScissor = nullptr;
     PFN_vkCmdSetDepthBounds cmdSetDepthBounds = nullptr;
     PFN_vkCmdSetDepthBias cmdSetDepthBias = nullptr;
+    PFN_vkCmdSetCullModeEXT cmdSetCullMode = nullptr;
+    PFN_vkCmdSetFrontFaceEXT cmdSetFrontFace = nullptr;
+    PFN_vkCmdSetDepthTestEnableEXT cmdSetDepthTestEnable = nullptr;
+    PFN_vkCmdSetDepthWriteEnableEXT cmdSetDepthWriteEnable = nullptr;
+    PFN_vkCmdSetDepthCompareOpEXT cmdSetDepthCompareOp = nullptr;
+    PFN_vkCmdSetDepthBoundsTestEnableEXT cmdSetDepthBoundsTestEnable = nullptr;
+    PFN_vkCmdSetStencilTestEnableEXT cmdSetStencilTestEnable = nullptr;
+    PFN_vkCmdSetStencilOpEXT cmdSetStencilOp = nullptr;
+    PFN_vkCmdSetStencilCompareMask cmdSetStencilCompareMask = nullptr;
+    PFN_vkCmdSetStencilWriteMask cmdSetStencilWriteMask = nullptr;
+    PFN_vkCmdSetStencilReference cmdSetStencilReference = nullptr;
     PFN_vkCmdBindVertexBuffers cmdBindVertexBuffers = nullptr;
     PFN_vkCmdBindIndexBuffer cmdBindIndexBuffer = nullptr;
     PFN_vkCmdDraw cmdDraw = nullptr;
@@ -125,8 +138,11 @@ struct Context {
     bool occlusionQueryPrecise = false;
     bool depthBounds = false;
     bool depthBiasClamp = false;
+    bool dualSrcBlend = false;
     bool samplerFilterMinmax = false;
+    bool nonSeamlessCubeMap = false;
     bool conservativeRasterization = false;
+    bool meshWave32 = false;
     VkBuffer emptyBuffer = VK_NULL_HANDLE;
     // The device's list of recorded dispatches whose copied written buffers await a CPU write-back
     // (VulkanDevice's State::copiedWriters; the draw counterpart is DrawCopiedWriters): an indirect
@@ -137,6 +153,7 @@ struct Context {
     // VK_EXT_descriptor_indexing with non-uniform sampled/storage image array indexing enabled
     // (bindless image tables in graphics stages).
     bool descriptorIndexing = false;
+    VkPhysicalDeviceDescriptorIndexingPropertiesEXT descriptorIndexingLimits{};
     bool imageInt64Atomics = false;
     bool geometryShader = false;
     bool sampleRateShading = false;
@@ -145,7 +162,11 @@ struct Context {
     bool primitiveListRestart = false;
     bool imageViewMinLod = false;
     bool pipelineExecutableInfo = false;
+    bool graphicsPipelineLibrary = false;
     std::uint32_t srgbDecodeFormats = 0;
+    bool provokingVertexLast = false;
+    bool provokingVertexModePerPipeline = false;
+    bool singlePassStorage = false;
 
     template<typename TFunction>
     TFunction Function(const char* name) const {
@@ -170,6 +191,11 @@ struct Context {
         throw std::runtime_error("AGC graphics: required Vulkan memory type is unavailable");
     }
 };
+
+inline void EndRenderPass(const Context& context, VkCommandBuffer commands) {
+    if (context.graphicsPipelineLibrary) context.Resolved(&DeviceFunctions::cmdEndRendering, "vkCmdEndRenderingKHR")(commands);
+    else context.Resolved(&DeviceFunctions::cmdEndRenderPass, "vkCmdEndRenderPass")(commands);
+}
 
 }
 

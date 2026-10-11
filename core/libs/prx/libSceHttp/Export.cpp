@@ -188,6 +188,12 @@ int APS5_VABI sceHttpSetRecvTimeOut(int id, uint32_t usec) {
     return 0;
 }
 
+int APS5_VABI sceHttpSetRecvBlockSize(int id, uint32_t block_size) {
+    (void)id;
+    (void)block_size;
+    return 0;
+}
+
 int APS5_VABI sceHttpSetResponseHeaderMaxSize(int id, uint64_t header_size) {
     (void)id;
     (void)header_size;
@@ -415,4 +421,8 @@ int APS5_VABI sceHttpSetRedirectCallback(int id, HttpRedirectCallback cbfunc, vo
     return 0;
 }
 
+int APS5_VABI sceHttpAbortWaitRequest(void) {
+    NotImplemented_nid_no_patch(__func__);
+    return 0;
+}
 }
