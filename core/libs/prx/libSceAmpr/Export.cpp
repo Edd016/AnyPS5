@@ -231,6 +231,8 @@ static std::atomic_flag sharedPtrSpinLock;
 
 extern "C" {
 int APS5_VABI pthread_join_nid_postfix(Pthread thread, void** value);
+int APS5_VABI scePthreadGetthreadid(void);
+int APS5_VABI _Cnd_init_nid_postfix(void** handle);
 int APS5_VABI wcsrtombs_s_nid_postfix(std::size_t* result, char* destination, std::size_t capacity, const std::uint16_t** source, std::size_t limit, void* state);
 }
 
@@ -875,8 +877,7 @@ int APS5_VABI _ZNSt4_PadD2Ev_nid_postfix(void) {
 }
 
 int APS5_VABI _Thrd_id_nid_postfix(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+    return scePthreadGetthreadid();
 }
 
 int APS5_VABI _ZNSt4_Pad7_LaunchEPP7pthread_nid_postfix(void) {
@@ -889,18 +890,18 @@ int APS5_VABI _ZNSt7num_getIcSt19istreambuf_iteratorIcSt11char_traitsIcEEE2idE_n
     return 0;
 }
 
-int APS5_VABI _Cnd_signal_nid_postfix(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI _Cnd_signal_nid_postfix(void** handle) {
+    SignalDinkumwareCondition_nid_no_patch(handle, "_Cnd_signal");
+    return ThrdSuccess;
 }
 
 void APS5_VABI _Unlock_shared_ptr_spin_lock_nid_postfix(void) {
     sharedPtrSpinLock.clear(std::memory_order_release);
 }
 
-int APS5_VABI _Cnd_init_with_name_nid_postfix(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI _Cnd_init_with_name_nid_postfix(void** handle, const char*) {
+    if (!handle) throw std::invalid_argument("_Cnd_init_with_name: null handle pointer");
+    return _Cnd_init_nid_postfix(handle);
 }
 
 int APS5_VABI _ZTVN10__cxxabiv120__function_type_infoE_nid_postfix(void) {

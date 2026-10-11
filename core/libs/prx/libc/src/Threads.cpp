@@ -173,4 +173,8 @@ int APS5_VABI _Cnd_broadcast_nid_postfix(void** handle) {
     return threadSuccess;
 }
 
+void SignalDinkumwareCondition_nid_no_patch(void** handle, const char* function) {
+    ResolveCondition(handle, function)->native.notify_one();
+}
+
 }

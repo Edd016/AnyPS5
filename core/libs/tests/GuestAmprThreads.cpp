@@ -17,7 +17,19 @@ struct GuestXtime {
 
 extern "C" {
 int APS5_VABI _Thrd_join_nid_postfix(Pthread thread, int* code);
+int APS5_VABI _Thrd_id_nid_postfix(void);
 int APS5_VABI _Thrd_sleep_nid_postfix(const GuestXtime* target, GuestXtime* remaining);
+int APS5_VABI _Cnd_init_with_name_nid_postfix(void** handle, const char* name);
+int APS5_VABI _Cnd_signal_nid_postfix(void** handle);
+int APS5_VABI _Cnd_init_nid_postfix(void** handle);
+int APS5_VABI _Cnd_wait_nid_postfix(void** condition, void** mutex);
+int APS5_VABI _Cnd_broadcast_nid_postfix(void** handle);
+void APS5_VABI _Cnd_destroy_nid_postfix(void** handle);
+int APS5_VABI _Mtx_init_nid_postfix(void** handle, int type);
+void APS5_VABI _Mtx_destroy_nid_postfix(void** handle);
+int APS5_VABI _Mtx_lock_nid_postfix(void** handle);
+int APS5_VABI _Mtx_unlock_nid_postfix(void** handle);
+int APS5_VABI scePthreadGetthreadid(void);
 void APS5_VABI _Lock_shared_ptr_spin_lock_nid_postfix(void);
 void APS5_VABI _Unlock_shared_ptr_spin_lock_nid_postfix(void);
 int APS5_VABI wcstombs_s_nid_postfix(std::size_t* result, char* destination, std::size_t capacity, const std::uint16_t* source, std::size_t limit);
@@ -111,6 +123,112 @@ static void TestThreadJoin() {
     release = true;
 }
 
+static void* APS5_VABI ReportThreadId(void* arg) {
+    auto& ids = *static_cast<std::array<int, 3>*>(arg);
+    ids[0] = _Thrd_id_nid_postfix();
+    ids[1] = _Thrd_id_nid_postfix();
+    ids[2] = scePthreadGetthreadid();
+    return nullptr;
+}
+
+static void TestThreadId() {
+    const int self = _Thrd_id_nid_postfix();
+    Require(self == _Thrd_id_nid_postfix() && self == scePthreadGetthreadid());
+    std::array<int, 3> first{};
+    std::array<int, 3> second{};
+    Require(_Thrd_join_nid_postfix(Start(ReportThreadId, &first), nullptr) == ThrdSuccess);
+    Require(_Thrd_join_nid_postfix(Start(ReportThreadId, &second), nullptr) == ThrdSuccess);
+    Require(first[0] == first[1] && first[0] == first[2] && first[0] != self);
+    Require(second[0] == second[1] && second[0] == second[2] && second[0] != self && second[0] != first[0]);
+}
+
+static constexpr int MutexPlain = 1;
+static constexpr int SignalWaiters = 2;
+
+struct SignalContext {
+    void* mutex = nullptr;
+    void* condition = nullptr;
+    int signals = 0;
+    int waiting = 0;
+    std::atomic<int> woken{0};
+};
+
+static void* APS5_VABI WaitForSignal(void* arg) {
+    auto& context = *static_cast<SignalContext*>(arg);
+    Require(_Mtx_lock_nid_postfix(&context.mutex) == ThrdSuccess);
+    ++context.waiting;
+    while (context.signals == 0) Require(_Cnd_wait_nid_postfix(&context.condition, &context.mutex) == ThrdSuccess);
+    --context.signals;
+    context.woken.fetch_add(1);
+    Require(_Mtx_unlock_nid_postfix(&context.mutex) == ThrdSuccess);
+    return nullptr;
+}
+
+static int Waiting(SignalContext& context) {
+    Require(_Mtx_lock_nid_postfix(&context.mutex) == ThrdSuccess);
+    const int waiting = context.waiting;
+    Require(_Mtx_unlock_nid_postfix(&context.mutex) == ThrdSuccess);
+    return waiting;
+}
+
+static void SignalOnce(SignalContext& context) {
+    Require(_Mtx_lock_nid_postfix(&context.mutex) == ThrdSuccess);
+    ++context.signals;
+    Require(_Cnd_signal_nid_postfix(&context.condition) == ThrdSuccess);
+    Require(_Mtx_unlock_nid_postfix(&context.mutex) == ThrdSuccess);
+}
+
+static bool RejectsSignal(void** handle) {
+    try {
+        _Cnd_signal_nid_postfix(handle);
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
+    return false;
+}
+
+static void TestConditionSignal() {
+    SignalContext context;
+    Require(_Mtx_init_nid_postfix(&context.mutex, MutexPlain) == ThrdSuccess);
+    Require(_Cnd_init_with_name_nid_postfix(&context.condition, "ampr condition") == ThrdSuccess && context.condition);
+    Require(_Cnd_signal_nid_postfix(&context.condition) == ThrdSuccess);
+
+    std::array<Pthread, SignalWaiters> waiters{};
+    for (auto& waiter : waiters) waiter = Start(WaitForSignal, &context);
+    while (Waiting(context) != SignalWaiters) std::this_thread::yield();
+    for (int woken = 1; woken <= SignalWaiters; ++woken) {
+        SignalOnce(context);
+        while (context.woken.load() != woken) std::this_thread::yield();
+    }
+    for (auto waiter : waiters) Require(_Thrd_join_nid_postfix(waiter, nullptr) == ThrdSuccess);
+    Require(context.signals == 0);
+    Require(_Cnd_broadcast_nid_postfix(&context.condition) == ThrdSuccess);
+    _Cnd_destroy_nid_postfix(&context.condition);
+    Require(!context.condition);
+
+    void* libcCondition = nullptr;
+    Require(_Cnd_init_nid_postfix(&libcCondition) == ThrdSuccess);
+    Require(_Cnd_signal_nid_postfix(&libcCondition) == ThrdSuccess);
+    _Cnd_destroy_nid_postfix(&libcCondition);
+
+    void* unnamed = nullptr;
+    Require(_Cnd_init_with_name_nid_postfix(&unnamed, nullptr) == ThrdSuccess && unnamed);
+    _Cnd_destroy_nid_postfix(&unnamed);
+
+    void* missing = nullptr;
+    Require(RejectsSignal(nullptr));
+    Require(RejectsSignal(&missing));
+    Require(RejectsSignal(&context.mutex));
+    bool rejected = false;
+    try {
+        _Cnd_init_with_name_nid_postfix(nullptr, "ampr condition");
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    Require(rejected);
+    _Mtx_destroy_nid_postfix(&context.mutex);
+}
+
 static void TestThreadSleep() {
     const auto target = XtimeAfter(50000000);
     Require(_Thrd_sleep_nid_postfix(&target, nullptr) == 0);
@@ -199,6 +317,8 @@ static void TestWcstombs() {
 
 int main() {
     TestThreadJoin();
+    TestThreadId();
+    TestConditionSignal();
     TestThreadSleep();
     TestSpinLock();
     TestWcstombs();
