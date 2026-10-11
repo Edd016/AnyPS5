@@ -255,6 +255,7 @@ int main() {
     Require(lstat_nid_postfix("", &linkStatus) == -1 && *__error_nid_postfix() == 2);
     Require(lstat_nid_postfix(nullptr, &linkStatus) == -1 && *__error_nid_postfix() == 14);
     Require(lstat_nid_postfix(presentName.c_str(), nullptr) == -1 && *__error_nid_postfix() == 14);
+    bool symbolicLinksUnavailable = false;
 #ifndef _WIN32
     const auto link = root / "link";
     std::filesystem::create_symlink("present.txt", link);
@@ -273,31 +274,36 @@ int main() {
     const auto fileLink = root / "file-link";
     const auto directoryLink = root / "directory-link";
     const auto danglingLink = root / "dangling-link";
-    Require(CreateSymbolicLinkW(fileLink.c_str(), present.c_str(), SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0);
-    Require(CreateSymbolicLinkW(directoryLink.c_str(), targetDirectory.c_str(),
-        SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0);
-    Require(CreateSymbolicLinkW(danglingLink.c_str(), missing.c_str(), SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0);
-    const auto checkUnsupportedLink = [](const std::filesystem::path& link) {
-        FileStat untouched;
-        std::memset(&untouched, 0x5a, sizeof(untouched));
-        constexpr int sentinelError = 123;
-        *__error_nid_postfix() = sentinelError;
-        bool rejected = false;
-        try {
-            lstat_nid_postfix(link.string().c_str(), &untouched);
-        } catch (const std::runtime_error& error) {
-            rejected = std::strcmp(error.what(), "lstat of a Windows symbolic link not implemented") == 0;
-        }
-        const bool errorUnchanged = *__error_nid_postfix() == sentinelError;
-        const auto* bytes = reinterpret_cast<const unsigned char*>(&untouched);
-        const bool statusUnchanged = std::all_of(bytes, bytes + sizeof(untouched), [](unsigned char value) { return value == 0x5a; });
-        return rejected && errorUnchanged && statusUnchanged;
-    };
-    Require(checkUnsupportedLink(fileLink));
-    Require(checkUnsupportedLink(directoryLink));
-    Require(checkUnsupportedLink(danglingLink));
-    Require(std::filesystem::remove(fileLink) && std::filesystem::remove(directoryLink) &&
-        std::filesystem::remove(danglingLink) && std::filesystem::remove(targetDirectory));
+    const bool fileLinkCreated = CreateSymbolicLinkW(fileLink.c_str(), present.c_str(), SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0;
+    Require(fileLinkCreated || GetLastError() == ERROR_PRIVILEGE_NOT_HELD);
+    symbolicLinksUnavailable = !fileLinkCreated;
+    if (fileLinkCreated) {
+        Require(CreateSymbolicLinkW(directoryLink.c_str(), targetDirectory.c_str(),
+            SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0);
+        Require(CreateSymbolicLinkW(danglingLink.c_str(), missing.c_str(), SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0);
+        const auto checkUnsupportedLink = [](const std::filesystem::path& link) {
+            FileStat untouched;
+            std::memset(&untouched, 0x5a, sizeof(untouched));
+            constexpr int sentinelError = 123;
+            *__error_nid_postfix() = sentinelError;
+            bool rejected = false;
+            try {
+                lstat_nid_postfix(link.string().c_str(), &untouched);
+            } catch (const std::runtime_error& error) {
+                rejected = std::strcmp(error.what(), "lstat of a Windows symbolic link not implemented") == 0;
+            }
+            const bool errorUnchanged = *__error_nid_postfix() == sentinelError;
+            const auto* bytes = reinterpret_cast<const unsigned char*>(&untouched);
+            const bool statusUnchanged = std::all_of(bytes, bytes + sizeof(untouched), [](unsigned char value) { return value == 0x5a; });
+            return rejected && errorUnchanged && statusUnchanged;
+        };
+        Require(checkUnsupportedLink(fileLink));
+        Require(checkUnsupportedLink(directoryLink));
+        Require(checkUnsupportedLink(danglingLink));
+        Require(std::filesystem::remove(fileLink) && std::filesystem::remove(directoryLink) &&
+            std::filesystem::remove(danglingLink));
+    }
+    Require(std::filesystem::remove(targetDirectory));
 #endif
     FileStat identity{};
     FileStat byDescriptor{};
@@ -430,4 +436,8 @@ int main() {
     Require(rmdir_nid_postfix(empty.string().c_str()) == 0 && !std::filesystem::exists(empty));
     Require(remove_nid_postfix(root.string().c_str()) == 0);
     Require(!std::filesystem::exists(root));
+    if (symbolicLinksUnavailable) {
+        std::puts("skipped the Windows symbolic link checks, creating one needs Developer Mode or administrator rights");
+        return 77;
+    }
 }
