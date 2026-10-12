@@ -1,6 +1,7 @@
 target_sources(libc PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Export.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/General.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/CreationMask.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/gcc/StackGuard.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/windows/CrashReport.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/specifics/linux/DlIteratePhdr.cpp
@@ -13,12 +14,14 @@ target_sources(libc PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/StringExtensions.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Math.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Random.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/HostEntropy.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Time.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/FileAndHeap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/StdioExtras.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/StandardStreams.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/GuestAllocations.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/GuestArena.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/GuestStacks.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/GuestWriteWatch.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Interfaces.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/GuestHeap.cpp
@@ -254,6 +257,24 @@ if(BUILD_TESTING)
         set_tests_properties(guest_hostname PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
+    add_test_executable(guest_memrchr_tests ${LIBS_INCLUDE_DIR}/tests/GuestMemrchr.cpp)
+    target_include_directories(guest_memrchr_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(guest_memrchr_tests PRIVATE libc)
+    configure_windows_unwind(guest_memrchr_tests)
+    add_test(NAME guest_memrchr COMMAND guest_memrchr_tests)
+    if(WIN32)
+        set_tests_properties(guest_memrchr PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+    add_test_executable(guest_daemon_tests ${LIBS_INCLUDE_DIR}/tests/GuestDaemon.cpp)
+    target_include_directories(guest_daemon_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(guest_daemon_tests PRIVATE libc)
+    configure_windows_unwind(guest_daemon_tests)
+    add_test(NAME guest_daemon COMMAND guest_daemon_tests)
+    if(WIN32)
+        set_tests_properties(guest_daemon PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
     add_test_executable(guest_lifecycle_tests ${LIBS_INCLUDE_DIR}/tests/GuestLifecycle.cpp)
     target_include_directories(guest_lifecycle_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(guest_lifecycle_tests PRIVATE libc)
@@ -281,6 +302,16 @@ if(BUILD_TESTING)
     if(WIN32)
         target_link_libraries(guest_interface_tests PRIVATE ws2_32 iphlpapi)
         set_tests_properties(guest_interfaces PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
+    add_test_executable(guest_atoi_tests ${LIBS_INCLUDE_DIR}/tests/GuestAtoi.cpp)
+    target_include_directories(guest_atoi_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(guest_atoi_tests PRIVATE libc)
+    configure_windows_unwind(guest_atoi_tests)
+    add_test(NAME guest_atoi COMMAND guest_atoi_tests)
+    set_tests_properties(guest_atoi PROPERTIES TIMEOUT 20)
+    if(WIN32)
+        set_tests_properties(guest_atoi PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
     add_test_executable(guest_reallocalign_tests ${LIBS_INCLUDE_DIR}/tests/GuestReallocalign.cpp)
@@ -472,6 +503,15 @@ if(BUILD_TESTING)
         target_include_directories(cpu_topology_tests PRIVATE ${LIBS_INCLUDE_DIR})
         add_test(NAME cpu_topology COMMAND cpu_topology_tests)
     endif()
+    add_test_executable(log_macros_tests ${LIBS_INCLUDE_DIR}/tests/LogMacros.cpp)
+    target_include_directories(log_macros_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(log_macros_tests PRIVATE libc)
+    configure_windows_unwind(log_macros_tests)
+    add_test(NAME log_macros COMMAND log_macros_tests)
+    if(WIN32)
+        set_tests_properties(log_macros PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+    endif()
 endif()
 
 if(WIN32)
@@ -550,5 +590,11 @@ if(MINGW)
         set_target_properties(windows_exception_tests PROPERTIES EXCLUDE_FROM_ALL FALSE)
         add_test(NAME windows_exceptions COMMAND windows_exception_tests)
         set_tests_properties(windows_exceptions PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+        add_test_executable(windows_backtrace_report_tests ${LIBS_INCLUDE_DIR}/tests/WindowsBacktraceReport.cpp)
+        target_link_libraries(windows_backtrace_report_tests PRIVATE libc)
+        add_test(NAME windows_backtrace_report COMMAND windows_backtrace_report_tests)
+        set_tests_properties(windows_backtrace_report PROPERTIES TIMEOUT 20
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>"
+            PASS_REGULAR_EXPRESSION "aborting[^~]*SIGABRT. on thread[^~]*stack return address candidates:[^~]*rsp[+]0x")
     endif()
 endif()

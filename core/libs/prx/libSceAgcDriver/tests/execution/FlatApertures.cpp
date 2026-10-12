@@ -17,6 +17,7 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -494,16 +495,20 @@ int main(int argc, char** argv) {
         const auto device = OpenVulkanTestDevice();
         if (!device) return VulkanTestSkipped;
         const bool wave64 = device->Target().subgroupSize >= 32u;
+        const bool int64Atomics = TargetHasCapability(device->Target(), spv::CapabilityInt64Atomics);
         GuestBlock guest;
         std::size_t checked = 0;
-        const auto rows = Rows();
-        for (std::size_t index = part; index < rows.size(); index += parts) {
-            const Row& row = rows[index];
+        std::map<std::pair<Words, std::uint32_t>, std::size_t> shaders;
+        for (const Row& row : Rows()) {
+            const auto shader = shaders.emplace(std::pair{Kernel(row), row.waveSize}, shaders.size()).first->second;
+            if (shader % parts != part) continue;
             if (row.waveSize == 64u && !wave64) continue;
+            if (row.atomic && row.width == 64u && !int64Atomics) continue;
             Run(*device, row, guest);
             ++checked;
         }
         if (!wave64) std::printf("skipped the wave64 rows, subgroup size %u cannot hold a wave64 in two lanes\n", device->Target().subgroupSize);
+        if (!int64Atomics) std::puts("skipped the 64-bit atomic rows, the device has no shaderBufferInt64Atomics");
         std::printf("flat aperture rows checked: %zu\n", checked);
         std::puts("flat aperture tests passed");
         return 0;
